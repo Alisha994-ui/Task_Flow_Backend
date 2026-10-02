@@ -30,3 +30,52 @@ class Project(models.Model):
 
     def __str__(self):
         return self.name
+
+class ProjectMember(models.Model):
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="project_members"
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="project_memberships"
+    )
+    joined_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project", "user"],
+                name="unique_project_member"
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.user.username} - {self.project.name}"
+
+class Milestone(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        IN_PROGRESS = "IN_PROGRESS", "In Progress"
+        COMPLETED = "COMPLETED", "Completed"
+
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="milestones"
+    )
+    name = models.CharField(max_length=200)
+    description = models.TextField(blank=True, null=True)
+    due_date = models.DateField(null=True, blank=True)
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.project.name} - {self.name}"
