@@ -248,7 +248,26 @@ class TimeLogViewSet(viewsets.ModelViewSet):
     permission_classes = [TimeLogPermission]
 
     def get_queryset(self):
-        return TimeLog.objects.filter(user=self.request.user).order_by("-start_time")
+            user = self.request.user
+            queryset = TimeLog.objects.all().order_by("-start_time")
+    
+            if user.role == "ADMIN":
+                pass
+            elif user.role == "PROJECT_MANAGER":
+                queryset = queryset.filter(task__project__manager=user)
+            elif user.role == "TEAM_LEAD":
+                queryset = queryset.filter(task__project__team__team_lead=user)
+            else:
+                queryset = queryset.filter(user=user)
+    
+            params = self.request.query_params
+            if params.get("task"):
+                queryset = queryset.filter(task_id=params.get("task"))
+            if params.get("user"):
+                queryset = queryset.filter(user_id=params.get("user"))
+    
+            return queryset
+    
 
     @action(detail=False, methods=["post"], url_path="start")
     def start_timer(self, request):

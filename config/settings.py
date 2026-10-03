@@ -9,7 +9,9 @@ https://docs.djangoproject.com/en/6.1/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.1/ref/settings/
 """
-
+from django.templatetags.static import static
+from django.urls import reverse_lazy
+from django.utils.translation import gettext_lazy as _
 from pathlib import Path
 import os
 from dotenv import load_dotenv
@@ -32,6 +34,7 @@ ALLOWED_HOSTS = []
 # Application definition
 
 INSTALLED_APPS = [
+    'unfold',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -49,6 +52,34 @@ INSTALLED_APPS = [
     'teams',
     'core',
 ]
+
+UNFOLD = {
+    "SITE_TITLE": "TaskFlow Admin",
+    "SITE_HEADER": "TaskFlow",
+    "SITE_SUBHEADER": "Project & Task Management",
+    "SITE_SYMBOL": "task_alt",
+    "SITE_URL": "/",
+    "SHOW_HISTORY": True,
+    "SHOW_VIEW_ON_SITE": True,
+    "SHOW_BACK_BUTTON": True,
+    "THEME": "light",
+    "BORDER_RADIUS": "10px",
+    "COLORS": {
+    "primary": {
+        "50": "238, 242, 255",
+        "100": "224, 231, 255",
+        "200": "199, 210, 254",
+        "300": "165, 180, 252",
+        "400": "129, 140, 248",
+        "500": "99, 102, 241",
+        "600": "79, 70, 229",
+        "700": "67, 56, 202",
+        "800": "55, 48, 163",
+        "900": "49, 46, 129",
+        "950": "30, 27, 75",
+    },
+},
+}
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
@@ -158,4 +189,4 @@ REST_FRAMEWORK = {
 }
 
 CORS_ALLOW_ALL_ORIGINS = True
-ALLOWED_HOSTS = ["127.0.0.1", "localhost"]
+ALLOWED_HOSTS = ["127.0.0.1", "localhost", "10.0.2.2", "192.168.100.4"]

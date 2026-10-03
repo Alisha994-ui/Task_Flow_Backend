@@ -1,9 +1,10 @@
 from django.contrib import admin
+from unfold.admin import ModelAdmin
 from .models import Team, TeamMember
 
 
 @admin.register(Team)
-class TeamAdmin(admin.ModelAdmin):
+class TeamAdmin(ModelAdmin):
 
     list_display = (
         "name",
@@ -24,7 +25,7 @@ class TeamAdmin(admin.ModelAdmin):
 
 
 @admin.register(TeamMember)
-class TeamMemberAdmin(admin.ModelAdmin):
+class TeamMemberAdmin(ModelAdmin):
 
     list_display = (
         "team",

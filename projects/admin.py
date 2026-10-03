@@ -1,8 +1,9 @@
 from django.contrib import admin
+from unfold.admin import ModelAdmin
 from .models import Project, ProjectMember,Milestone
 
 @admin.register(Project)
-class ProjectAdmin(admin.ModelAdmin):
+class ProjectAdmin(ModelAdmin):
     list_display = (
         "name",
         "manager",
@@ -18,7 +19,7 @@ class ProjectAdmin(admin.ModelAdmin):
 
 
 @admin.register(ProjectMember)
-class ProjectMemberAdmin(admin.ModelAdmin):
+class ProjectMemberAdmin(ModelAdmin):
     list_display = (
         "project",
         "user",
@@ -32,7 +33,7 @@ class ProjectMemberAdmin(admin.ModelAdmin):
     )
 
 @admin.register(Milestone)
-class MilestoneAdmin(admin.ModelAdmin):
+class MilestoneAdmin(ModelAdmin):
     list_display = (
         "name",
         "project",
