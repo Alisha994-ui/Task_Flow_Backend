@@ -1,16 +1,32 @@
 from django.utils import timezone
 from rest_framework import viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from notifications.models import Notification
 from .models import Task, Subtask, Comment, Label, Attachment, ActivityLog, TimeLog
 from .serializers import TaskSerializer, SubtaskSerializer, CommentSerializer, LabelSerializer, AttachmentSerializer, ActivityLogSerializer, TimeLogSerializer
 from .permissions import TaskPermission, CommentPermission, AttachmentPermission, TimeLogPermission, ActivityLogPermission, SubtaskPermission, LabelPermission
+from projects.models import Project
+
 
 class TaskViewSet(viewsets.ModelViewSet):
     queryset = Task.objects.all().order_by("-created_at")
     serializer_class = TaskSerializer
     permission_classes = [TaskPermission]
+
+    def perform_destroy(self, instance):
+        # BUG-07: only Admin and Project Manager may delete tasks.
+        # A Project Manager can only reach tasks in their own projects,
+        # because get_queryset() scopes them (anything else returns 404).
+        if self.request.user.role not in ("ADMIN", "PROJECT_MANAGER"):
+            raise PermissionDenied("Only admins and project managers can delete tasks.")
+
+        project = instance.project
+        instance.delete()
+
+        # Keep the project's progress correct after the task is gone.
+        self.update_project_progress(project)
 
     def get_queryset(self):
         user = self.request.user
@@ -47,19 +63,46 @@ class TaskViewSet(viewsets.ModelViewSet):
         total = project.tasks.count()
         completed = project.tasks.filter(status=Task.Status.COMPLETED).count()
         project.progress = round((completed / total) * 100) if total else 0
-        project.save(update_fields=["progress"])
+
+        if project.status != Project.Status.CANCELLED:
+            if project.progress == 100 and project.status != Project.Status.COMPLETED:
+                project.status = Project.Status.COMPLETED
+            elif project.progress < 100 and project.status == Project.Status.COMPLETED:
+                project.status = Project.Status.ACTIVE
+
+        project.save(update_fields=["progress", "status"])
 
     def perform_create(self, serializer):
         task = serializer.save(creator=self.request.user)
         self.update_project_progress(task.project)
-        ActivityLog.objects.create(task=task, user=self.request.user, action="TASK_CREATED", description=f'Task "{task.title}" was created.')
+        ActivityLog.objects.create(
+            task=task,
+            user=self.request.user,
+            action="TASK_CREATED",
+            description=f'Task "{task.title}" was created.',
+        )
+
         if task.assignee:
-            Notification.objects.create(user=task.assignee, task=task, type=Notification.Type.TASK_ASSIGNED, title="New Task Assigned", message=f'You have been assigned the task "{task.title}".')
+            Notification.objects.create(
+                user=task.assignee,
+                task=task,
+                type=Notification.Type.TASK_ASSIGNED,
+                title="New Task Assigned",
+                message=f'You have been assigned the task "{task.title}".',
+            )
+
+        # A task created directly as Urgent still deserves its own ping -
+        # assignment and urgency are different things to know about, and
+        # someone creating a task pre-set to Urgent is exactly the case
+        # where the people on it should hear about it immediately.
+        if task.priority == Task.Priority.URGENT:
+            self._notify_urgent(task)
 
     def perform_update(self, serializer):
         old_task = self.get_object()
         old_status = old_task.status
         old_assignee = old_task.assignee
+        old_priority = old_task.priority
         task = serializer.save()
         self.update_project_progress(task.project)
 
@@ -70,6 +113,53 @@ class TaskViewSet(viewsets.ModelViewSet):
             ActivityLog.objects.create(task=task, user=self.request.user, action="TASK_REASSIGNED", description=f'Task "{task.title}" was reassigned.')
             if task.assignee:
                 Notification.objects.create(user=task.assignee, task=task, type=Notification.Type.TASK_REASSIGNED, title="Task Reassigned", message=f'You have been assigned the task "{task.title}".')
+
+        # Only fire the moment priority *becomes* Urgent, never on a save
+        # that merely leaves it Urgent - editing the description of an
+        # already-urgent task must not re-ping everyone every time.
+        if task.priority == Task.Priority.URGENT and old_priority != Task.Priority.URGENT:
+            ActivityLog.objects.create(
+                task=task,
+                user=self.request.user,
+                action="PRIORITY_CHANGED",
+                description=f'Task "{task.title}" was marked Urgent.',
+            )
+            self._notify_urgent(task)
+
+    def _notify_urgent(self, task):
+        """Tell whoever needs to act on an Urgent task that it is now Urgent.
+
+        Assignee first - they are the one doing the work. The project's
+        manager and the team's lead are included too (when they are not
+        also the assignee and not the person who just made this change),
+        since "this just became urgent" is exactly the kind of thing a
+        manager wants to know about even if they did not do it
+        themselves.
+        """
+        actor = self.request.user
+        recipients = set()
+
+        if task.assignee:
+            recipients.add(task.assignee)
+
+        project = task.project
+        if getattr(project, "manager_id", None):
+            recipients.add(project.manager)
+
+        team = getattr(project, "team", None)
+        if team and getattr(team, "team_lead_id", None):
+            recipients.add(team.team_lead)
+
+        recipients.discard(actor)
+
+        for user in recipients:
+            Notification.objects.create(
+                user=user,
+                task=task,
+                type=Notification.Type.TASK_URGENT,
+                title="Task Marked Urgent",
+                message=f'"{task.title}" was just marked Urgent.',
+            )
 
     @action(detail=False, methods=["get"], url_path="my")
     def my_tasks(self, request):
@@ -150,6 +240,7 @@ class TaskViewSet(viewsets.ModelViewSet):
 
         return Response(TaskSerializer(task).data)
 
+
 class CommentViewSet(viewsets.ModelViewSet):
     queryset = Comment.objects.all().order_by("created_at")
     serializer_class = CommentSerializer
@@ -176,6 +267,7 @@ class CommentViewSet(viewsets.ModelViewSet):
         if task.assignee and task.assignee != self.request.user:
             Notification.objects.create(user=task.assignee, task=task, type=Notification.Type.COMMENT, title="New Comment", message=f'{self.request.user.username} commented on your task "{task.title}".')
 
+
 class SubtaskViewSet(viewsets.ModelViewSet):
     queryset = Subtask.objects.all().order_by("-created_at")
     serializer_class = SubtaskSerializer
@@ -195,10 +287,12 @@ class SubtaskViewSet(viewsets.ModelViewSet):
             return Subtask.objects.filter(task__project__project_members__user=user).distinct().order_by("-created_at")
         return Subtask.objects.none()
 
+
 class LabelViewSet(viewsets.ModelViewSet):
     queryset = Label.objects.all().order_by("name")
     serializer_class = LabelSerializer
     permission_classes = [LabelPermission]
+
 
 class AttachmentViewSet(viewsets.ModelViewSet):
     queryset = Attachment.objects.all().order_by("-created_at")
@@ -223,6 +317,7 @@ class AttachmentViewSet(viewsets.ModelViewSet):
         attachment = serializer.save(uploaded_by=self.request.user)
         ActivityLog.objects.create(task=attachment.task, user=self.request.user, action="ATTACHMENT_ADDED", description=f'Attachment "{attachment.file.name}" was added.')
 
+
 class ActivityLogViewSet(viewsets.ModelViewSet):
     queryset = ActivityLog.objects.all().order_by("-created_at")
     serializer_class = ActivityLogSerializer
@@ -242,32 +337,32 @@ class ActivityLogViewSet(viewsets.ModelViewSet):
             return ActivityLog.objects.filter(task__project__project_members__user=user).distinct().order_by("-created_at")
         return ActivityLog.objects.none()
 
+
 class TimeLogViewSet(viewsets.ModelViewSet):
     queryset = TimeLog.objects.all().order_by("-start_time")
     serializer_class = TimeLogSerializer
     permission_classes = [TimeLogPermission]
 
     def get_queryset(self):
-            user = self.request.user
-            queryset = TimeLog.objects.all().order_by("-start_time")
-    
-            if user.role == "ADMIN":
-                pass
-            elif user.role == "PROJECT_MANAGER":
-                queryset = queryset.filter(task__project__manager=user)
-            elif user.role == "TEAM_LEAD":
-                queryset = queryset.filter(task__project__team__team_lead=user)
-            else:
-                queryset = queryset.filter(user=user)
-    
-            params = self.request.query_params
-            if params.get("task"):
-                queryset = queryset.filter(task_id=params.get("task"))
-            if params.get("user"):
-                queryset = queryset.filter(user_id=params.get("user"))
-    
-            return queryset
-    
+        user = self.request.user
+        queryset = TimeLog.objects.all().order_by("-start_time")
+
+        if user.role == "ADMIN":
+            pass
+        elif user.role == "PROJECT_MANAGER":
+            queryset = queryset.filter(task__project__manager=user)
+        elif user.role == "TEAM_LEAD":
+            queryset = queryset.filter(task__project__team__team_lead=user)
+        else:
+            queryset = queryset.filter(user=user)
+
+        params = self.request.query_params
+        if params.get("task"):
+            queryset = queryset.filter(task_id=params.get("task"))
+        if params.get("user"):
+            queryset = queryset.filter(user_id=params.get("user"))
+
+        return queryset
 
     @action(detail=False, methods=["post"], url_path="start")
     def start_timer(self, request):

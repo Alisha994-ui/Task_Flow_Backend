@@ -2,6 +2,12 @@ from rest_framework import serializers
 from .models import Task, Subtask, Comment, Attachment, Label, ActivityLog, TimeLog
 
 class TaskSerializer(serializers.ModelSerializer):
+    # BUG-05: every task now carries its project's name directly, so a
+    # role whose /projects/ list doesn't include this project (e.g. an
+    # Employee, who can only list their own assigned tasks) still sees
+    # the real name instead of "Project #<id>" on the client.
+    project_name = serializers.CharField(source="project.name", read_only=True)
+
     class Meta:
         model = Task
         fields = "__all__"
@@ -41,14 +47,6 @@ class LabelSerializer(serializers.ModelSerializer):
         model = Label
         fields = "__all__"
 
-class CommentSerializer(serializers.ModelSerializer):
-    user_name = serializers.CharField(source="user.username", read_only=True)
-
-    class Meta:
-        model = Comment
-        fields = ("id", "task", "user", "user_name", "text", "created_at", "updated_at")
-        read_only_fields = ("user",)
-
 class AttachmentSerializer(serializers.ModelSerializer):
     uploaded_by_name = serializers.CharField(source="uploaded_by.username", read_only=True)
 
@@ -72,4 +70,3 @@ class TimeLogSerializer(serializers.ModelSerializer):
         model = TimeLog
         fields = ("id", "task", "user", "user_name", "start_time", "end_time", "duration_minutes", "note")
         read_only_fields = ("user",)
-

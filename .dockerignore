@@ -1,0 +1,19 @@
+# Never in the image: secrets, local state, tooling.
+.env
+.env.*
+!.env.production.example
+secrets/
+media/
+staticfiles/
+venv/
+.venv/
+**/__pycache__/
+**/*.pyc
+.git/
+.github/
+.gitattributes
+*.zip
+*.md
+assistant_backup/
+backups/
+docker-compose*.yml

@@ -1,0 +1,13 @@
+# Direct dependencies only. requirements.txt is the resolved lock built
+# from this file:  pip install pip-tools && pip-compile requirements.in
+Django==6.1.1
+djangorestframework==3.18.1
+djangorestframework_simplejwt==5.5.1
+django-cors-headers==4.9.0
+django-unfold==0.108.0
+psycopg2-binary==2.9.13
+pillow==12.3.0
+python-dotenv==1.2.4
+firebase_admin==7.7.0
+google-genai==2.30.0
+gunicorn==23.0.0

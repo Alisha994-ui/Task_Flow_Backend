@@ -60,7 +60,14 @@ class Attachment(models.Model):
     uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="uploaded_attachments")
     file = models.FileField(upload_to="task_attachments/")
     created_at = models.DateTimeField(auto_now_add=True)
-
+    comment = models.ForeignKey(
+        "Comment",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="attachments",
+    )
+    
     def __str__(self):
         return self.file.name
 

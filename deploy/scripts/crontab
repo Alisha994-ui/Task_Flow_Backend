@@ -1,0 +1,5 @@
+# Scheduler (supercronic). Times are UTC; 03:00 UTC = 08:00 PKT.
+# Deadline and overdue notifications, once a day; each one becomes a push.
+0 3 * * * python manage.py send_deadline_reminders
+# Keep project progress figures consistent, nightly.
+30 2 * * * python manage.py fix_project_progress

@@ -19,7 +19,13 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
+from datetime import timedelta
 
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=30),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=90),
+    "ROTATE_REFRESH_TOKENS": True,
+}
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
@@ -28,7 +34,21 @@ load_dotenv(BASE_DIR / ".env")
 SECRET_KEY = os.getenv("SECRET_KEY")
 DEBUG = os.getenv("DEBUG", "False") == "True"
 
-ALLOWED_HOSTS = []
+
+def _env_list(name, default):
+    """Comma-separated env var -> list. Unset keeps the development default."""
+    value = os.getenv(name)
+
+    if value is None:
+        return default
+
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+if not SECRET_KEY:
+    from django.core.exceptions import ImproperlyConfigured
+
+    raise ImproperlyConfigured("SECRET_KEY is not set.")
 
 
 # Application definition
@@ -44,6 +64,7 @@ INSTALLED_APPS = [
 
     "corsheaders",
     'rest_framework',
+    'assistant',
 
     'users',
     'projects',
@@ -51,6 +72,7 @@ INSTALLED_APPS = [
     'tasks',
     'teams',
     'core',
+    'discussions',
 ]
 
 UNFOLD = {
@@ -123,6 +145,10 @@ DATABASES = {
         "PASSWORD": os.getenv("DB_PASSWORD"),
         "HOST": os.getenv("DB_HOST"),
         "PORT": os.getenv("DB_PORT"),
+        # Reuse connections between requests; checked before reuse so a
+        # database restart does not surface as a failed request.
+        "CONN_MAX_AGE": int(os.getenv("DB_CONN_MAX_AGE", "60")),
+        "CONN_HEALTH_CHECKS": True,
     }
 }
 
@@ -161,19 +187,32 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.1/howto/static-files/
 
 STATIC_URL = 'static/'
+# collectstatic writes here; nginx serves it in production.
+STATIC_ROOT = Path(os.getenv("STATIC_ROOT", BASE_DIR / "staticfiles"))
 
 
 # Email
 # https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
 
 MAILERS = {
-    'default': {
-        'BACKEND': 'django.core.mail.backends.console.EmailBackend',
+    "default": {
+        "BACKEND": "django.core.mail.backends.smtp.EmailBackend",
+        "OPTIONS": {
+            "host": os.getenv("EMAIL_HOST", "mail.kotenterprises.com"),
+            "port": int(os.getenv("EMAIL_PORT", 587)),
+            "username": os.getenv("EMAIL_HOST_USER", ""),
+            "password": os.getenv("EMAIL_HOST_PASSWORD", ""),
+            "use_tls": True,
+            "timeout": 10,
+        },
     },
 }
 
+DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "TaskFlow <no-reply@kotenterprises.com>")
+TASKFLOW_APP_NAME = "TaskFlow"
+
 MEDIA_URL = "/media/"
-MEDIA_ROOT = BASE_DIR / "media"
+MEDIA_ROOT = Path(os.getenv("MEDIA_ROOT", BASE_DIR / "media"))
 
 AUTH_USER_MODEL = "users.User"
 
@@ -188,5 +227,77 @@ REST_FRAMEWORK = {
     "PAGE_SIZE": 10,
 }
 
-CORS_ALLOW_ALL_ORIGINS = True
-ALLOWED_HOSTS = ["127.0.0.1", "localhost", "10.0.2.2", "192.168.100.4"]
+# The mobile app is not a browser, so CORS does not apply to it. Keep
+# "allow all" for local development only; production lists its origins.
+CORS_ALLOW_ALL_ORIGINS = os.getenv("CORS_ALLOW_ALL_ORIGINS", "True") == "True"
+CORS_ALLOWED_ORIGINS = _env_list("CORS_ALLOWED_ORIGINS", [])
+
+ALLOWED_HOSTS = _env_list(
+    "ALLOWED_HOSTS",
+    ["127.0.0.1", "localhost", "cornmeal-phonebook-lingo.ngrok-free.dev"],
+)
+CSRF_TRUSTED_ORIGINS = _env_list(
+    "CSRF_TRUSTED_ORIGINS",
+    ["https://cornmeal-phonebook-lingo.ngrok-free.dev"],
+)
+
+FIREBASE_CREDENTIALS_FILE = Path(
+    os.getenv(
+        "FIREBASE_CREDENTIALS_FILE",
+        BASE_DIR / "secrets" / "firebase-admin.json",
+    )
+)
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+
+
+# ---------------------------------------------------------------------------
+# Production hardening - active only when DEBUG is off.
+# TLS ends at the reverse proxy (Plesk / nginx), which sets
+# X-Forwarded-Proto; Django trusts that header to know the request was HTTPS.
+# ---------------------------------------------------------------------------
+if not DEBUG:
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    USE_X_FORWARDED_HOST = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    SECURE_REFERRER_POLICY = "same-origin"
+    X_FRAME_OPTIONS = "DENY"
+    # The proxy already redirects HTTP to HTTPS; redirecting here as well
+    # would also redirect the container's internal health checks.
+    SECURE_SSL_REDIRECT = os.getenv("SECURE_SSL_REDIRECT", "False") == "True"
+    # Start low; raise to 31536000 once HTTPS is confirmed on the domain.
+    SECURE_HSTS_SECONDS = int(os.getenv("SECURE_HSTS_SECONDS", "3600"))
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = False
+    SECURE_HSTS_PRELOAD = False
+    # Deliberate, see above: the proxy owns the HTTP->HTTPS redirect (W008),
+    # and the parent domain hosts other sites, so HSTS must not cover its
+    # subdomains or be preloaded (W005, W021).
+    SILENCED_SYSTEM_CHECKS = ["security.W005", "security.W008", "security.W021"]
+
+# Uploads: 25 MB per request body (attachments, discussion files).
+DATA_UPLOAD_MAX_MEMORY_SIZE = int(os.getenv("DATA_UPLOAD_MAX_MEMORY_SIZE", 26214400))
+FILE_UPLOAD_MAX_MEMORY_SIZE = 5242880
+
+# Everything to stdout/stderr, so `docker compose logs` has it all.
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "plain": {
+            "format": "%(asctime)s %(levelname)s %(name)s: %(message)s",
+        },
+    },
+    "handlers": {
+        "console": {"class": "logging.StreamHandler", "formatter": "plain"},
+    },
+    "root": {"handlers": ["console"], "level": os.getenv("LOG_LEVEL", "INFO")},
+    "loggers": {
+        "django": {
+            "handlers": ["console"],
+            "level": os.getenv("DJANGO_LOG_LEVEL", "WARNING"),
+            "propagate": False,
+        },
+    },
+}
